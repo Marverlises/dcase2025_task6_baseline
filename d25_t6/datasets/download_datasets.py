@@ -8,7 +8,7 @@ from aac_datasets.datasets.functional.clotho import download_clotho_datasets
 from aac_datasets.datasets.functional.wavcaps import download_wavcaps_datasets
 
 def download_clotho(data_path: str):
-
+    os.makedirs(data_path, exist_ok=True)
     download_clotho_datasets(
         subsets=["dev", "val", "eval"],
         root=data_path,
@@ -17,7 +17,7 @@ def download_clotho(data_path: str):
     )
 
 def download_audiocaps(data_path: str):
-
+    os.makedirs(data_path, exist_ok=True)
     URL = "https://cloud.cp.jku.at/index.php/s/9MiMcrNjJ3Z9FfH/download/AUDIOCAPS.zip"
 
     zip_file = os.path.join(data_path, 'AUDIOCAPS.zip')
@@ -30,7 +30,7 @@ def download_audiocaps(data_path: str):
 
 
 def download_wavcaps_mp3(data_path: str):
-
+    os.makedirs(data_path, exist_ok=True)
     URLS = [
         "https://cloud.cp.jku.at/index.php/s/BxBp6r6asdsiWK8/download/WavCaps_mp3.7z.001",
         "https://cloud.cp.jku.at/index.php/s/dYMoW7D7nAx2LSE/download/WavCaps_mp3.7z.002",
@@ -61,7 +61,7 @@ def download_wavcaps_mp3(data_path: str):
 
 
 def download_wavcaps(data_path: str, huggingface_cache_path: str):
-
+    os.makedirs(data_path, exist_ok=True)
     # dirty fix to bypass a directory does not exist error...
     f_ = aac_datasets.datasets.functional.wavcaps._is_prepared_wavcaps
     def f(*args, **kwargs): return False
@@ -101,3 +101,15 @@ def download_zip_from_cloud(url: str, zip_file: str):
 
 def extract_zip(zip_file: str, extract_to_dir: str):
     subprocess.run(["7z", "x", zip_file, f"-o{extract_to_dir}"], check=True)
+
+
+
+if __name__ == '__main__':
+    data_path = r'/share/project/baiyu/my_datasets/dcase2025'
+    huggingface_cache_path = r'/share/project/baiyu/my_datasets/dcase2025/huggingface_cache'
+    print("Downloading  Clotho...")
+    download_clotho(os.path.join(data_path, "Clotho"))
+    download_audiocaps(os.path.join(data_path, "AudioCaps"))
+    download_wavcaps_mp3(os.path.join(data_path, "WavCaps1"))
+    download_wavcaps(os.path.join(data_path, "WavCaps2"), huggingface_cache_path)
+    print("All datasets downloaded.")
