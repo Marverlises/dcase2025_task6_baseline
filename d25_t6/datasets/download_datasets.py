@@ -9,6 +9,9 @@ from aac_datasets.datasets.functional.wavcaps import download_wavcaps_datasets
 
 def download_clotho(data_path: str):
     os.makedirs(data_path, exist_ok=True)
+    if os.path.exists(data_path):
+        print("Clotho already exists. Skipping download.")
+        return
     download_clotho_datasets(
         subsets=["dev", "val", "eval"],
         root=data_path,
@@ -100,7 +103,7 @@ def download_zip_from_cloud(url: str, zip_file: str):
 
 
 def extract_zip(zip_file: str, extract_to_dir: str):
-    subprocess.run(["7z", "x", zip_file, f"-o{extract_to_dir}"], check=True)
+    subprocess.run(["7z", "x", zip_file, f"-o {extract_to_dir}"], check=True)
 
 
 
