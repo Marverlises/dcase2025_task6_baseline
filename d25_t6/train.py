@@ -11,6 +11,7 @@ import lightning as pl
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch import seed_everything
+from lightning.pytorch.strategies import DDPStrategy
 
 from aac_datasets import Clotho, WavCaps, AudioCaps
 from torch.utils.data import DataLoader
@@ -63,12 +64,18 @@ def train(
     )
 
     # trainer
+    # Configure strategy for DDP to handle unused parameters (e.g., tau when tau_trainable=False)
+    # This is needed when tau_trainable=False, as tau is used but doesn't require gradients
+    strategy = DDPStrategy(find_unused_parameters=True) if args['devices'] != 'cpu' else None
+    
     trainer = pl.Trainer(
         devices=args['devices'],
+        strategy=strategy,
         logger=logger if wandb.run else None,
         callbacks=[checkpoint_callback],
         max_epochs=args['max_epochs'],
         precision="16-mixed",
+        accumulate_grad_batches=args.get('accumulate_grad_batches', 1),
         num_sanity_val_steps=0,
         fast_dev_run=False
     )
@@ -107,8 +114,13 @@ def test(
     Returns:
         dict: The result of the model evaluation on the test dataset.
     """
+    # Configure strategy for DDP to handle unused parameters (e.g., tau when tau_trainable=False)
+    # This is needed when tau_trainable=False, as tau is used but doesn't require gradients
+    strategy = DDPStrategy(find_unused_parameters=True) if args['devices'] != 'cpu' else None
+    
     trainer = pl.Trainer(
         devices=args['devices'],
+        strategy=strategy,
         logger=logger if wandb.run else None,
         callbacks=None,
         max_epochs=args['max_epochs'],
@@ -140,7 +152,7 @@ def get_args() -> dict:
 
     parser.add_argument('--devices', type=str, default='auto', help='Device selection (e.g., auto, cpu, cuda, etc.)')
     parser.add_argument('--n_workers', type=int, default=16, help='Number of workers for data loading')
-    parser.add_argument('--compile', default=False, action=argparse.BooleanOptionalAction, help='Compile the model if GPU version >= 7.')
+    parser.add_argument('--compile', default=True, action=argparse.BooleanOptionalAction, help='Compile the model if GPU version >= 7.')
     parser.add_argument('--logging', default=True, action=argparse.BooleanOptionalAction, help='Log metrics in wandb or not.')
 
     # Parameter initialization & resume training
@@ -148,9 +160,10 @@ def get_args() -> dict:
     parser.add_argument('--load_ckpt_path', type=str, default=None, help='Path to checkpoint used as a weight initialization for training.')
 
     # Training parameters
-    parser.add_argument('--seed', type=int, default=21208, help='Random seed of experiment')
+    parser.add_argument('--seed', type=int, default=13, help='Random seed of experiment')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--batch_size_eval', type=int, default=64, help='Batch size for evaluation')
+    parser.add_argument('--accumulate_grad_batches', type=int, default=1, help='Number of batches to accumulate gradients before optimizer step')
     parser.add_argument('--max_epochs', type=int, default=20, help='Maximum number of epochs')
     parser.add_argument('--warmup_epochs', type=int, default=1, help='Number of warmup epochs')
     parser.add_argument('--rampdown_epochs', type=int, default=15, help='Number of ramp-down epochs')
@@ -174,6 +187,11 @@ def get_args() -> dict:
     # Paths
     parser.add_argument('--data_path', type=str, default='data', help='Path to dataset; dataset will be downloaded into this folder.')
     parser.add_argument('--checkpoints_path', type=str, default='checkpoints', help='Path to save checkpoints to.')
+    # Separate set dataset path
+    parser.add_argument('--audiocaps_path', type=str, default='/share/project/baiyu/my_datasets/dcase2025/AudioCaps/AUDIOCAPS', help='Path to AudioCaps dataset if separate from data_path.')
+    parser.add_argument('--wavcaps_path', type=str, default='/share/project/baiyu/my_datasets/dcase2025/WavCaps1', help='Path to WavCaps dataset if separate from data_path.')
+    parser.add_argument('--clotho_path', type=str, default='/share/project/baiyu/my_datasets/dcase2025/Clotho', help='Path to Clotho dataset if separate from data_path.')
+
 
     # run training / test
     parser.add_argument('--train', default=True, action=argparse.BooleanOptionalAction, help='Run training or not.')
@@ -195,7 +213,7 @@ if __name__ == '__main__':
     os.makedirs(args["data_path"], exist_ok=True)
     # download data sets; will be ignored if exists
     # ClothoV2.1
-    download_clotho(args["data_path"])
+    download_clotho(args["clotho_path"])
     # AudioCAps
     if args['audiocaps']:
         download_audiocaps(args["data_path"])
@@ -226,29 +244,29 @@ if __name__ == '__main__':
     # train
     if args['train']:
         # get training ad validation data sets; add the resampling transformation
-        train_ds = custom_loading(Clotho(subset="dev", root=args["data_path"], flat_captions=True))
+        train_ds = custom_loading(Clotho(subset="dev", root=args["clotho_path"], flat_captions=True, download=False))
 
         if args['audiocaps']:
             ac = custom_loading(
-                AudioCaps(subset="train", root=args["data_path"], download=True, download_audio=False, audio_format='mp3')
+                AudioCaps(subset="train", root=args["audiocaps_path"], download=False, download_audio=False, audio_format='mp3')
             )
             train_ds = torch.utils.data.ConcatDataset([train_ds, ac])
 
         if args['wavcaps']:
             # load the subsets
-            wc_f = exclude_forbidden_files(custom_loading(WavCaps(subset="freesound", root=args["data_path"])))
-            wc_b = custom_loading(WavCaps(subset="bbc", root=args["data_path"]))
-            wc_s = custom_loading(WavCaps(subset="soundbible", root=args["data_path"]))
-            wc_a = exclude_broken_files(custom_loading(WavCaps(subset="audioset_no_audiocaps" if not args["ablate_clean_setup"] else "audioset", root=args["data_path"])))
+            wc_f = exclude_forbidden_files(custom_loading(WavCaps(subset="freesound", root=args["wavcaps_path"])))
+            wc_b = custom_loading(WavCaps(subset="bbc", root=args["wavcaps_path"]))
+            wc_s = custom_loading(WavCaps(subset="soundbible", root=args["wavcaps_path"]))
+            wc_a = exclude_broken_files(custom_loading(WavCaps(subset="audioset_no_audiocaps" if not args["ablate_clean_setup"] else "audioset", root=args["wavcaps_path"])))
             train_ds = torch.utils.data.ConcatDataset([train_ds, wc_f, wc_b, wc_s, wc_a])
 
-        val_ds = custom_loading(Clotho(subset="val", root=args["data_path"], flat_captions=True))
+        val_ds = custom_loading(Clotho(subset="val", root=args["clotho_path"], flat_captions=True))
 
         model = train(model, train_ds, val_ds, logger, args)
 
     # test
     if args['test']:
-        test_ds = custom_loading(Clotho(subset="eval", root=args["data_path"], flat_captions=True))
+        test_ds = custom_loading(Clotho(subset="eval", root=args["clotho_path"], flat_captions=True))
 
         results = test(model, test_ds, logger, args)
         print(results)
