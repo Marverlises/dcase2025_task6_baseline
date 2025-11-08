@@ -59,8 +59,72 @@ conda install -c conda-forge p7zip
 conda install -c conda-forge 7zip
 ```
 
+4. Install FFmpeg (required for efficient audio loading)
 
-4. Install a [PyTorch](https://pytorch.org/get-started/previous-versions/) version that suits your system. For example:
+**Windows:**
+- **Option 1 (Recommended - Using conda):**
+  ```
+  conda install -c conda-forge ffmpeg
+  ```
+
+- **Option 2 (Using chocolatey):**
+  ```
+  choco install ffmpeg
+  ```
+
+- **Option 3 (Manual installation):**
+  1. Download FFmpeg from [https://www.gyan.dev/ffmpeg/builds/](https://www.gyan.dev/ffmpeg/builds/)
+  2. Download the "ffmpeg-release-essentials.zip" file
+  3. Extract the zip file to a folder (e.g., `C:\ffmpeg`)
+  4. Add `C:\ffmpeg\bin` to your system PATH environment variable
+  5. Restart your terminal/PowerShell
+
+**Linux:**
+
+- **Option 1 (Recommended - Using conda):**
+  ```bash
+  conda install -c conda-forge ffmpeg
+  ```
+
+- **Option 2 (Using package manager - Ubuntu/Debian):**
+  ```bash
+  sudo apt update
+  sudo apt install ffmpeg
+  ```
+
+- **Option 3 (Using package manager - CentOS/RHEL/Fedora):**
+  ```bash
+  # For CentOS/RHEL 7/8
+  sudo yum install ffmpeg
+  # or for newer versions
+  sudo dnf install ffmpeg
+  
+  # For Fedora
+  sudo dnf install ffmpeg
+  ```
+
+- **Option 4 (Using package manager - Arch Linux):**
+  ```bash
+  sudo pacman -S ffmpeg
+  ```
+
+**Verify installation:**
+```bash
+ffmpeg -version
+# or
+ffprobe -version
+```
+
+**macOS:**
+```
+brew install ffmpeg
+# or using conda
+conda install -c conda-forge ffmpeg
+```
+
+**Note:** If FFmpeg is not installed, the system will automatically fall back to using librosa for audio loading, which may be slower for large audio files.
+
+5. Install a [PyTorch](https://pytorch.org/get-started/previous-versions/) version that suits your system. For example:
 
 ```
 # for cuda >= 12.1 (check with nvidia-smi)
@@ -70,12 +134,12 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 # for otther versions see: https://pytorch.org/get-started/locally/
 ```
 
-5. Install other dependencies:
+6. Install other dependencies:
 ```
 pip3 install -r requirements.txt
 ```
 
-6. If you have not used [Weights and Biases](https://wandb.ai/site) for logging before, you can create a free account. On your
+7. If you have not used [Weights and Biases](https://wandb.ai/site) for logging before, you can create a free account. On your
 machine, run ```wandb login``` and copy your API key from [this](https://wandb.ai/authorize) link to the command line.
 
 ## Run Experiments

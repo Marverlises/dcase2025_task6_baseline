@@ -136,6 +136,7 @@ def _load_random_segment_ffmpeg(
 ) -> tuple[Tensor, int]:
     """
     Efficiently extracts a random 30-second segment from an audio file using ffmpeg without loading the full file.
+    Falls back to librosa if ffmpeg/ffprobe is not available.
 
     :param file_path: Path to the audio file
     :param segment_duration: Segment duration in seconds (default: 30s)
@@ -164,19 +165,65 @@ def _load_random_segment_ffmpeg(
             .run(capture_stdout=True, capture_stderr=True)
         )
 
+        audio = np.frombuffer(out, dtype=np.float32)
+        # Convert to PyTorch tensor with shape (1, num_samples)
+        return torch.tensor(audio).unsqueeze(0), sample_rate
+
+    except FileNotFoundError as e:
+        # FFmpeg/ffprobe not installed, use librosa fallback
+        # Only print warning once to avoid spam
+        if not hasattr(_load_random_segment_ffmpeg, '_ffmpeg_warning_printed'):
+            print(f"Warning: ffmpeg/ffprobe not found. Falling back to librosa for audio loading.")
+            print(f"This may be slower for large audio files. Consider installing ffmpeg for better performance.")
+            _load_random_segment_ffmpeg._ffmpeg_warning_printed = True
+        return _load_random_segment_librosa(file_path, segment_duration, sample_rate)
+    
     except ffmpeg.Error as e:
-        print(f"FFmpeg error when processing file: {file_path}")
-        print("Standard Output:", e.stdout.decode() if e.stdout else "None")
-        print("Standard Error:", e.stderr.decode() if e.stderr else "None")
-        raise  # Re-raise the exception for debugging
+        # FFmpeg error, try librosa as fallback
+        print(f"FFmpeg error when processing file: {file_path}, falling back to librosa")
+        if hasattr(e, 'stdout') and e.stdout:
+            print("Standard Output:", e.stdout.decode() if isinstance(e.stdout, bytes) else e.stdout)
+        if hasattr(e, 'stderr') and e.stderr:
+            print("Standard Error:", e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr)
+        return _load_random_segment_librosa(file_path, segment_duration, sample_rate)
 
     except Exception as e:
-        print(f"Unexpected error when processing file: {file_path}")
+        # For any other error, try librosa as fallback
+        print(f"Unexpected error when processing file: {file_path}, falling back to librosa")
         print(str(e))
-        raise  # Re-raise the general exception
+        return _load_random_segment_librosa(file_path, segment_duration, sample_rate)
 
-    audio = np.frombuffer(out, dtype=np.float32)
 
+def _load_random_segment_librosa(
+        file_path: str,
+        segment_duration: int = 30,
+        sample_rate: int = 32000
+) -> tuple[Tensor, int]:
+    """
+    Fallback function to load a random segment using librosa when ffmpeg is not available.
+    
+    :param file_path: Path to the audio file
+    :param segment_duration: Segment duration in seconds (default: 30s)
+    :param sample_rate: Sample rate for extracted audio (default: 32kHz)
+    :return: PyTorch tensor of extracted audio and sample rate
+    """
+    # Load the full audio file with librosa
+    audio, sr = librosa.load(file_path, sr=sample_rate, mono=True)
+    duration = len(audio) / sr
+    
+    if duration < segment_duration:
+        # Audio is shorter than segment_duration, pad with zeros
+        target_length = int(segment_duration * sample_rate)
+        if len(audio) < target_length:
+            audio = np.pad(audio, (0, target_length - len(audio)), mode='constant')
+        start_idx = 0
+    else:
+        # Randomly select a segment
+        max_start = int((duration - segment_duration) * sample_rate)
+        start_idx = torch.randint(0, max_start + 1, (1,)).item()
+        end_idx = start_idx + int(segment_duration * sample_rate)
+        audio = audio[start_idx:end_idx]
+    
     # Convert to PyTorch tensor with shape (1, num_samples)
     return torch.tensor(audio).unsqueeze(0), sample_rate
 

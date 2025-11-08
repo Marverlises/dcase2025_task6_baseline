@@ -154,7 +154,7 @@ def get_args() -> dict:
     parser.add_argument('--n_workers', type=int, default=16, help='Number of workers for data loading')
     parser.add_argument('--compile', default=True, action=argparse.BooleanOptionalAction, help='Compile the model if GPU version >= 7.')
     parser.add_argument('--logging', default=True, action=argparse.BooleanOptionalAction, help='Log metrics in wandb or not.')
-
+    parser.add_argument('--exp_name', type=str, default='exp_test', help='Directory to save logs.')
     # Parameter initialization & resume training
     parser.add_argument('--resume_ckpt_path', type=str, default=None, help='Path to checkpoint to resume training from.')
     parser.add_argument('--load_ckpt_path', type=str, default=None, help='Path to checkpoint used as a weight initialization for training.')
@@ -181,14 +181,14 @@ def get_args() -> dict:
 
     # use additional data sets...
     parser.add_argument('--wavcaps', default=False, action=argparse.BooleanOptionalAction, help='Include WavCaps in the training or not.')
-    parser.add_argument('--audiocaps', default=False, action=argparse.BooleanOptionalAction, help='Include AudioCaps in the training or not.')
-    parser.add_argument('--ablate_clean_setup', default=True, action=argparse.BooleanOptionalAction, help='Include ClothoV2.1 eval, test in the training or not.')
+    parser.add_argument('--audiocaps', default=True, action=argparse.BooleanOptionalAction, help='Include AudioCaps in the training or not.')
+    parser.add_argument('--ablate_clean_setup', default=False, action=argparse.BooleanOptionalAction, help='Include ClothoV2.1 eval, test in the training or not.')
 
     # Paths
     parser.add_argument('--data_path', type=str, default='data', help='Path to dataset; dataset will be downloaded into this folder.')
     parser.add_argument('--checkpoints_path', type=str, default='checkpoints', help='Path to save checkpoints to.')
     # Separate set dataset path
-    parser.add_argument('--audiocaps_path', type=str, default='/share/project/baiyu/my_datasets/dcase2025/AudioCaps/AUDIOCAPS', help='Path to AudioCaps dataset if separate from data_path.')
+    parser.add_argument('--audiocaps_path', type=str, default='/share/project/baiyu/my_datasets/dcase2025/AudioCaps', help='Path to AudioCaps dataset if separate from data_path.')
     parser.add_argument('--wavcaps_path', type=str, default='/share/project/baiyu/my_datasets/dcase2025/WavCaps1', help='Path to WavCaps dataset if separate from data_path.')
     parser.add_argument('--clotho_path', type=str, default='/share/project/baiyu/my_datasets/dcase2025/Clotho', help='Path to Clotho dataset if separate from data_path.')
 
@@ -216,10 +216,10 @@ if __name__ == '__main__':
     download_clotho(args["clotho_path"])
     # AudioCAps
     if args['audiocaps']:
-        download_audiocaps(args["data_path"])
+        download_audiocaps(args["audiocaps_path"])
     # WavCaps
     if args['wavcaps']:
-        download_wavcaps_mp3(args["data_path"])
+        download_wavcaps_mp3(args["wavcaps_path"])
         # download_wavcaps(args["data_path"], args["huggingface_cache_path"])
 
     # set a seed to make experiments reproducible
@@ -230,7 +230,7 @@ if __name__ == '__main__':
 
     # initialize wandb, i.e., the logging framework
     if args['logging']:
-        wandb.init(project="d25_t6")
+        wandb.init(project="d25_t6", name=args['exp_name'])
         logger = WandbLogger()
     else:
         logger = None

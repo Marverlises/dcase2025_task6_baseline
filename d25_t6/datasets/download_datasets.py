@@ -109,10 +109,10 @@ def extract_zip(zip_file: str, extract_to_dir: str):
 
 if __name__ == '__main__':
     data_path = r'/share/project/baiyu/my_datasets/dcase2025'
-    huggingface_cache_path = r'/share/project/baiyu/my_datasets/dcase2025/huggingface_cache'
-    print("Downloading  Clotho...")
-    download_clotho(os.path.join(data_path, "Clotho"))
-    download_audiocaps(os.path.join(data_path, "AudioCaps"))
+    # huggingface_cache_path = r'/share/project/baiyu/my_datasets/dcase2025/huggingface_cache'
+    # print("Downloading  Clotho...")
+    # download_clotho(os.path.join(data_path, "Clotho"))
+    # download_audiocaps(os.path.join(data_path, "AudioCaps"))
     download_wavcaps_mp3(os.path.join(data_path, "WavCaps1"))
-    download_wavcaps(os.path.join(data_path, "WavCaps2"), huggingface_cache_path)
+    # download_wavcaps(os.path.join(data_path, "WavCaps2"), huggingface_cache_path)
     print("All datasets downloaded.")

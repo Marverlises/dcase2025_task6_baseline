@@ -225,24 +225,74 @@ class AudioRetrievalModel(pl.LightningModule):
                 ranks = [i.item() for i in torch.argsort(torch.argsort(-c))[r]]
                 return ranks
 
-            # index of query in C
-            matched_files["query_index"] = matched_files["query"].transform(lambda x: captions.tolist().index(x))
+            # Create mapping dictionaries for safe lookup
+            captions_list = captions.tolist()
+            captions_to_index = {cap: idx for idx, cap in enumerate(captions_list)}
+            paths_list = paths.tolist()
+            paths_to_index = {path: idx for idx, path in enumerate(paths_list)}
 
-            # new ground truth
-            matched_files["new_audio_indices"] = matched_files["audio_filenames"].transform(lambda x: [paths.tolist().index(y) for y in x])
-            matched_files["TP_ranks"] = matched_files.apply(lambda row: get_ranks(C[row["query_index"]], row["new_audio_indices"]), axis=1)
+            # index of query in C - use safe lookup with fallback
+            def safe_caption_index(x):
+                if x in captions_to_index:
+                    return captions_to_index[x]
+                else:
+                    # Try case-insensitive and stripped version
+                    x_normalized = x.lower().strip() if isinstance(x, str) else str(x).lower().strip()
+                    for cap, idx in captions_to_index.items():
+                        if isinstance(cap, str) and cap.lower().strip() == x_normalized:
+                            return idx
+                    # If still not found, return None (will be filtered out)
+                    print(f"Warning: Query '{x}' not found in captions. Skipping this entry.")
+                    return None
 
-            def average_precision_at_k(relevant_ranks, k=10):
-                relevant_ranks = sorted(relevant_ranks)
-                ap = 0.0
-                for i, rank in enumerate(relevant_ranks, start=1):
-                    if rank >= k:
-                        break
-                    ap += i / (rank + 1) # precision at threshold
-                return ap / len(relevant_ranks)  # Normalize by total number of relevant items
+            matched_files["query_index"] = matched_files["query"].transform(safe_caption_index)
+            
+            # Filter out rows where query_index is None
+            matched_files = matched_files[matched_files["query_index"].notna()].copy()
+            
+            if len(matched_files) == 0:
+                print("Warning: No valid queries found in metadata_eval.csv after matching. Skipping multiple positives mAP calculation.")
+            else:
+                matched_files["query_index"] = matched_files["query_index"].astype(int)
 
-            new_mAP = matched_files["TP_ranks"].apply(lambda ranks: average_precision_at_k(ranks, 10)).mean()
-            self.log(f'{prefix}_multiple_positives/mAP@10', new_mAP)
+                # new ground truth - use safe lookup
+                def safe_path_indices(x):
+                    indices = []
+                    for y in x:
+                        if y in paths_to_index:
+                            indices.append(paths_to_index[y])
+                        else:
+                            # Try to find similar path (case-insensitive)
+                            y_normalized = y.lower().strip() if isinstance(y, str) else str(y).lower().strip()
+                            found = False
+                            for path, idx in paths_to_index.items():
+                                if isinstance(path, str) and path.lower().strip() == y_normalized:
+                                    indices.append(idx)
+                                    found = True
+                                    break
+                            if not found:
+                                print(f"Warning: Audio filename '{y}' not found in paths. Skipping this filename.")
+                    return indices
+
+                matched_files["new_audio_indices"] = matched_files["audio_filenames"].transform(safe_path_indices)
+                
+                # Filter out rows where new_audio_indices is empty
+                matched_files = matched_files[matched_files["new_audio_indices"].apply(lambda x: len(x) > 0)].copy()
+                
+                if len(matched_files) > 0:
+                    matched_files["TP_ranks"] = matched_files.apply(lambda row: get_ranks(C[row["query_index"]], row["new_audio_indices"]), axis=1)
+
+                    def average_precision_at_k(relevant_ranks, k=10):
+                        relevant_ranks = sorted(relevant_ranks)
+                        ap = 0.0
+                        for i, rank in enumerate(relevant_ranks, start=1):
+                            if rank >= k:
+                                break
+                            ap += i / (rank + 1) # precision at threshold
+                        return ap / len(relevant_ranks)  # Normalize by total number of relevant items
+
+                    new_mAP = matched_files["TP_ranks"].apply(lambda ranks: average_precision_at_k(ranks, 10)).mean()
+                    self.log(f'{prefix}_multiple_positives/mAP@10', new_mAP)
         # empty cached batches from validation loop
         self.validation_outputs.clear()
 
