@@ -67,7 +67,7 @@ def train(
     # Configure strategy for DDP to handle unused parameters (e.g., tau when tau_trainable=False)
     # This is needed when tau_trainable=False, as tau is used but doesn't require gradients
     strategy = DDPStrategy(find_unused_parameters=True) if args['devices'] != 'cpu' else None
-    
+
     trainer = pl.Trainer(
         devices=args['devices'],
         strategy=strategy,
@@ -117,7 +117,7 @@ def test(
     # Configure strategy for DDP to handle unused parameters (e.g., tau when tau_trainable=False)
     # This is needed when tau_trainable=False, as tau is used but doesn't require gradients
     strategy = DDPStrategy(find_unused_parameters=True) if args['devices'] != 'cpu' else None
-    
+
     trainer = pl.Trainer(
         devices=args['devices'],
         strategy=strategy,
@@ -157,7 +157,7 @@ def get_args() -> dict:
     parser.add_argument('--exp_name', type=str, default='exp_test', help='Directory to save logs.')
     # Parameter initialization & resume training
     parser.add_argument('--resume_ckpt_path', type=str, default=None, help='Path to checkpoint to resume training from.')
-    parser.add_argument('--load_ckpt_path', type=str, default=None, help='Path to checkpoint used as a weight initialization for training.')
+    parser.add_argument('--load_ckpt_path', type=str, default="/share/project/baiyu/project/dcase2025_task6_baseline/checkpoints/dataset_clotho/best.ckpt", help='Path to checkpoint used as a weight initialization for training.')
 
     # Training parameters
     parser.add_argument('--seed', type=int, default=13, help='Random seed of experiment')
@@ -182,7 +182,7 @@ def get_args() -> dict:
     # use additional data sets...
     parser.add_argument('--wavcaps', default=False, action=argparse.BooleanOptionalAction, help='Include WavCaps in the training or not.')
     parser.add_argument('--audiocaps', default=True, action=argparse.BooleanOptionalAction, help='Include AudioCaps in the training or not.')
-    parser.add_argument('--ablate_clean_setup', default=False, action=argparse.BooleanOptionalAction, help='Include ClothoV2.1 eval, test in the training or not.')
+    parser.add_argument('--clotho', default=True, action=argparse.BooleanOptionalAction, help='Include ClothoV2.1 eval, test in the training or not.')
 
     # Paths
     parser.add_argument('--data_path', type=str, default='data', help='Path to dataset; dataset will be downloaded into this folder.')
@@ -194,7 +194,7 @@ def get_args() -> dict:
 
 
     # run training / test
-    parser.add_argument('--train', default=True, action=argparse.BooleanOptionalAction, help='Run training or not.')
+    parser.add_argument('--train', default=False, action=argparse.BooleanOptionalAction, help='Run training or not.')
     parser.add_argument('--test', default=True, action=argparse.BooleanOptionalAction, help='Run testing or not.')
 
     args = parser.parse_args()
@@ -244,20 +244,21 @@ if __name__ == '__main__':
     # train
     if args['train']:
         # get training ad validation data sets; add the resampling transformation
-        train_ds = custom_loading(Clotho(subset="dev", root=args["clotho_path"], flat_captions=True, download=False))
+        if args['clotho']:
+            train_ds = custom_loading(Clotho(subset="dev", root=args["clotho_path"], flat_captions=True, download=False))
 
         if args['audiocaps']:
-            ac = custom_loading(
+            train_ds = custom_loading(
                 AudioCaps(subset="train", root=args["audiocaps_path"], download=False, download_audio=False, audio_format='mp3')
             )
-            train_ds = torch.utils.data.ConcatDataset([train_ds, ac])
+            # train_ds = torch.utils.data.ConcatDataset([train_ds, ac])
 
         if args['wavcaps']:
             # load the subsets
             wc_f = exclude_forbidden_files(custom_loading(WavCaps(subset="freesound", root=args["wavcaps_path"])))
             wc_b = custom_loading(WavCaps(subset="bbc", root=args["wavcaps_path"]))
             wc_s = custom_loading(WavCaps(subset="soundbible", root=args["wavcaps_path"]))
-            wc_a = exclude_broken_files(custom_loading(WavCaps(subset="audioset_no_audiocaps" if not args["ablate_clean_setup"] else "audioset", root=args["wavcaps_path"])))
+            wc_a = exclude_broken_files(custom_loading(WavCaps(subset="audioset_no_audiocaps" if not args["clotho"] else "audioset", root=args["wavcaps_path"])))
             train_ds = torch.utils.data.ConcatDataset([train_ds, wc_f, wc_b, wc_s, wc_a])
 
         val_ds = custom_loading(Clotho(subset="val", root=args["clotho_path"], flat_captions=True))
@@ -266,7 +267,17 @@ if __name__ == '__main__':
 
     # test
     if args['test']:
-        test_ds = custom_loading(Clotho(subset="eval", root=args["clotho_path"], flat_captions=True))
+        if args['clotho']:
+            # test on ClothoV2.1 eval set
+            test_ds = custom_loading(Clotho(subset="eval", root=args["clotho_path"], flat_captions=True))
+            results = test(model, test_ds, logger, args)
+            print("Test on ClothoV2.1 evaluation set:")
+            print(results)
+        if args['audiocaps']:
+            # test on AudioCaps eval set
+            test_ds = custom_loading(
+                AudioCaps(subset="test", root=args["audiocaps_path"], download=False, download_audio=False, audio_format='mp3'))
+            results = test(model, test_ds, logger, args)
+            print("Test on AudioCaps evaluation set:")
+            print(results)
 
-        results = test(model, test_ds, logger, args)
-        print(results)

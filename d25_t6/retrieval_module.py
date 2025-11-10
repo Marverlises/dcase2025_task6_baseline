@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from lightning import pytorch as pl
 from transformers import RobertaTokenizer, RobertaModel
+from prettytable import PrettyTable
 
 from d25_t6.passt import CutInputIntoSegmentsWrapper, PaSSTSNoOverlapWrapper
 
@@ -194,27 +195,82 @@ class AudioRetrievalModel(pl.LightningModule):
         text_embeddings = torch.cat([o['text_embeddings'] for o in outputs])
 
         # concatenate global ranking
-        C = torch.matmul(text_embeddings, audio_embeddings.T)
+        C_text_to_audio = torch.matmul(text_embeddings, audio_embeddings.T)
+        C_audio_to_text = C_text_to_audio.T  # Transpose for audio-to-text retrieval
 
-        # get top 10
-        top_ten = C.topk(10, dim=1)[1].detach().cpu().numpy()
+        # ========== Text-to-Audio Retrieval Metrics ==========
+        # get top 10 for text-to-audio
+        top_ten_t2a = C_text_to_audio.topk(10, dim=1)[1].detach().cpu().numpy()
         target = np.array(target)
 
-        # recall metrics
-        r_1 = (top_ten[:, :1] == target[:, None]).sum(axis=1).mean()
-        r_5 = (top_ten[:, :5] == target[:, None]).sum(axis=1).mean()
-        r_10 = (top_ten == target[:, None]).sum(axis=1).mean()
+        # recall metrics for text-to-audio
+        r_1_t2a = (top_ten_t2a[:, :1] == target[:, None]).sum(axis=1).mean()
+        r_5_t2a = (top_ten_t2a[:, :5] == target[:, None]).sum(axis=1).mean()
+        r_10_t2a = (top_ten_t2a == target[:, None]).sum(axis=1).mean()
 
-        # mAP@10
-        AP = 1 / ((top_ten == target[:, None]).argmax(axis=1) + 1)
-        AP[~(top_ten == target[:, None]).any(axis=1)] = 0
-        mAP = AP.mean()
+        # mAP@10 for text-to-audio
+        AP_t2a = 1 / ((top_ten_t2a == target[:, None]).argmax(axis=1) + 1)
+        AP_t2a[~(top_ten_t2a == target[:, None]).any(axis=1)] = 0
+        mAP_t2a = AP_t2a.mean()
 
-        # log retrieval performance
-        self.log(f'{prefix}/R@1', r_1)
-        self.log(f'{prefix}/R@5', r_5)
-        self.log(f'{prefix}/R@10', r_10)
-        self.log(f'{prefix}/mAP@10', mAP)
+        # log text-to-audio retrieval performance
+        prefix = 'text-to-audio/' + prefix
+        self.log(f'{prefix}/R@1', r_1_t2a)
+        self.log(f'{prefix}/R@5', r_5_t2a)
+        self.log(f'{prefix}/R@10', r_10_t2a)
+        self.log(f'{prefix}/mAP@10', mAP_t2a)
+
+        # ========== Audio-to-Text Retrieval Metrics ==========
+        # For audio-to-text, we need to find which captions correspond to each audio
+        # Create a mapping: audio_idx -> list of caption indices that match this audio
+        audio_to_caption_indices = {}
+        for caption_idx, audio_idx in enumerate(target):
+            if audio_idx not in audio_to_caption_indices:
+                audio_to_caption_indices[audio_idx] = []
+            audio_to_caption_indices[audio_idx].append(caption_idx)
+
+        # get top 10 for audio-to-text
+        top_ten_a2t = C_audio_to_text.topk(10, dim=1)[1].detach().cpu().numpy()
+        
+        # Calculate recall metrics for audio-to-text
+        # For each audio, check if any of its ground truth captions are in top-k
+        r_1_a2t_list = []
+        r_5_a2t_list = []
+        r_10_a2t_list = []
+        AP_a2t_list = []
+        
+        for audio_idx in range(len(paths)):
+            true_caption_indices = set(audio_to_caption_indices.get(audio_idx, []))
+            retrieved_indices = top_ten_a2t[audio_idx]
+            
+            # R@1
+            r_1_a2t_list.append(1 if retrieved_indices[0] in true_caption_indices else 0)
+            
+            # R@5
+            r_5_a2t_list.append(1 if any(idx in true_caption_indices for idx in retrieved_indices[:5]) else 0)
+            
+            # R@10
+            r_10_a2t_list.append(1 if any(idx in true_caption_indices for idx in retrieved_indices[:10]) else 0)
+            
+            # mAP@10
+            # Find the rank of the first relevant caption
+            relevant_ranks = [rank + 1 for rank, idx in enumerate(retrieved_indices) if idx in true_caption_indices]
+            if relevant_ranks:
+                AP_a2t_list.append(1.0 / relevant_ranks[0])
+            else:
+                AP_a2t_list.append(0.0)
+        
+        r_1_a2t = np.mean(r_1_a2t_list)
+        r_5_a2t = np.mean(r_5_a2t_list)
+        r_10_a2t = np.mean(r_10_a2t_list)
+        mAP_a2t = np.mean(AP_a2t_list)
+
+        # log audio-to-text retrieval performance
+        prefix = 'audio-to-text/' + prefix
+        self.log(f'{prefix}_a2t/R@1', r_1_a2t)
+        self.log(f'{prefix}_a2t/R@5', r_5_a2t)
+        self.log(f'{prefix}_a2t/R@10', r_10_a2t)
+        self.log(f'{prefix}_a2t/mAP@10', mAP_a2t)
 
         if os.path.exists(f'resources/metadata_eval.csv') and prefix == 'test':
 
@@ -280,7 +336,7 @@ class AudioRetrievalModel(pl.LightningModule):
                 matched_files = matched_files[matched_files["new_audio_indices"].apply(lambda x: len(x) > 0)].copy()
                 
                 if len(matched_files) > 0:
-                    matched_files["TP_ranks"] = matched_files.apply(lambda row: get_ranks(C[row["query_index"]], row["new_audio_indices"]), axis=1)
+                    matched_files["TP_ranks"] = matched_files.apply(lambda row: get_ranks(C_text_to_audio[row["query_index"]], row["new_audio_indices"]), axis=1)
 
                     def average_precision_at_k(relevant_ranks, k=10):
                         relevant_ranks = sorted(relevant_ranks)
