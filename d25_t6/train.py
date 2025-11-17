@@ -3,6 +3,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.functional
 warnings.filterwarnings("ignore", category=FutureWarning, module="hear21passt.models.preprocess")
 
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 from typing import Union, List, Mapping
 import torch
 import wandb
@@ -157,7 +158,7 @@ def get_args() -> dict:
     parser.add_argument('--exp_name', type=str, default='exp_test', help='Directory to save logs.')
     # Parameter initialization & resume training
     parser.add_argument('--resume_ckpt_path', type=str, default=None, help='Path to checkpoint to resume training from.')
-    parser.add_argument('--load_ckpt_path', type=str, default="/share/project/baiyu/project/dcase2025_task6_baseline/checkpoints/dataset_clotho/best.ckpt", help='Path to checkpoint used as a weight initialization for training.')
+    parser.add_argument('--load_ckpt_path', type=str, default="/share/project/baiyu/project/dcase2025_task6_baseline/checkpoints/dataset_audiocaps/last.ckpt", help='Path to checkpoint used as a weight initialization for training.')
 
     # Training parameters
     parser.add_argument('--seed', type=int, default=13, help='Random seed of experiment')
@@ -182,7 +183,7 @@ def get_args() -> dict:
     # use additional data sets...
     parser.add_argument('--wavcaps', default=False, action=argparse.BooleanOptionalAction, help='Include WavCaps in the training or not.')
     parser.add_argument('--audiocaps', default=True, action=argparse.BooleanOptionalAction, help='Include AudioCaps in the training or not.')
-    parser.add_argument('--clotho', default=True, action=argparse.BooleanOptionalAction, help='Include ClothoV2.1 eval, test in the training or not.')
+    parser.add_argument('--clotho', default=False, action=argparse.BooleanOptionalAction, help='Include ClothoV2.1 eval, test in the training or not.')
 
     # Paths
     parser.add_argument('--data_path', type=str, default='data', help='Path to dataset; dataset will be downloaded into this folder.')
