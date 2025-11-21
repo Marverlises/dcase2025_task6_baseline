@@ -180,6 +180,29 @@ def get_args() -> dict:
     # RoBERTa parameters
     parser.add_argument('--roberta_base', default=False, action=argparse.BooleanOptionalAction,  help='Use Roberta base or large.')
 
+    # Intra-Modal Alignment parameters
+    parser.add_argument('--enable_intra_modal_alignment', default=False, action=argparse.BooleanOptionalAction, 
+                       help='Enable Intra-Modal Alignment (global-local alignment).')
+    parser.add_argument('--enable_matching_loss', default=False, action=argparse.BooleanOptionalAction,
+                       help='Enable matching loss (global-to-global contrastive loss).')
+    parser.add_argument('--enable_alignment_loss', default=False, action=argparse.BooleanOptionalAction,
+                       help='Enable alignment loss (local-to-local contrastive loss).')
+    parser.add_argument('--alignment_loss_weight', type=float, default=0.4,
+                       help='Weight for alignment loss (default: 0.4).')
+    parser.add_argument('--matching_loss_weight', type=float, default=1.0,
+                       help='Weight for matching loss (default: 1.0).')
+    parser.add_argument('--delta', type=float, default=0.2,
+                       help='Margin for contrastive losses (default: 0.2).')
+    parser.add_argument('--measure', type=str, default='cosine',
+                       choices=['cosine', 'dot', 'order'],
+                       help='Similarity measure for contrastive losses (default: cosine).')
+    parser.add_argument('--max_violation', default=True, action=argparse.BooleanOptionalAction,
+                       help='Use max violation in contrastive losses.')
+    parser.add_argument('--aggregation', type=str, default='sum-max-sentences',
+                       help='Aggregation method for alignment loss (default: sum-max-sentences).')
+    parser.add_argument('--sigma', type=float, default=0.0,
+                       help='Sigma parameter for intra-modal consistency (default: 0.0).')
+
     # use additional data sets...
     parser.add_argument('--wavcaps', default=False, action=argparse.BooleanOptionalAction, help='Include WavCaps in the training or not.')
     parser.add_argument('--audiocaps', default=True, action=argparse.BooleanOptionalAction, help='Include AudioCaps in the training or not.')
@@ -195,7 +218,7 @@ def get_args() -> dict:
 
 
     # run training / test
-    parser.add_argument('--train', default=False, action=argparse.BooleanOptionalAction, help='Run training or not.')
+    parser.add_argument('--train', default=True, action=argparse.BooleanOptionalAction, help='Run training or not.')
     parser.add_argument('--test', default=True, action=argparse.BooleanOptionalAction, help='Run testing or not.')
 
     args = parser.parse_args()

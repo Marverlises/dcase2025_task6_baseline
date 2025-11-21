@@ -12,6 +12,7 @@ from transformers import RobertaTokenizer, RobertaModel
 from prettytable import PrettyTable
 
 from d25_t6.passt import CutInputIntoSegmentsWrapper, PaSSTSNoOverlapWrapper
+from d25_t6.losses import AlignmentContrastiveLoss, ContrastiveLoss, l2norm
 
 
 class AudioRetrievalModel(pl.LightningModule):
@@ -51,6 +52,37 @@ class AudioRetrievalModel(pl.LightningModule):
         initial_tau = torch.zeros((1,)) + kwargs['initial_tau']
         self.tau = torch.nn.Parameter(initial_tau, requires_grad=kwargs['tau_trainable'])
 
+        # Intra-Modal Alignment parameters
+        self.enable_intra_modal_alignment = kwargs.get('enable_intra_modal_alignment', False)
+        self.enable_matching_loss = kwargs.get('enable_matching_loss', False)
+        self.enable_alignment_loss = kwargs.get('enable_alignment_loss', False)
+        self.alignment_loss_weight = kwargs.get('alignment_loss_weight', 0.4)
+        self.matching_loss_weight = kwargs.get('matching_loss_weight', 1.0)
+        
+        # Initialize loss functions if Intra-Modal Alignment is enabled
+        if self.enable_intra_modal_alignment:
+            delta = kwargs.get('delta', 0.2)
+            measure = kwargs.get('measure', 'cosine')
+            max_violation = kwargs.get('max_violation', True)
+            aggregation = kwargs.get('aggregation', 'sum-max-sentences')
+            sigma = kwargs.get('sigma', 0.0)
+            
+            if self.enable_alignment_loss:
+                self.alignment_criterion = AlignmentContrastiveLoss(
+                    margin=delta,
+                    measure=measure,
+                    max_violation=max_violation,
+                    aggregation=aggregation
+                )
+            
+            if self.enable_matching_loss:
+                self.matching_criterion = ContrastiveLoss(
+                    margin=delta,
+                    measure=measure,
+                    max_violation=max_violation,
+                    sigma=sigma
+                )
+
         self.validation_outputs = []
 
         self.kwargs = kwargs
@@ -74,6 +106,103 @@ class AudioRetrievalModel(pl.LightningModule):
         audio_embeddings = self.forward_audio(batch)
 
         return audio_embeddings, text_embeddings
+    
+    def forward_audio_with_local(self, batch):
+        """
+        Forward audio and return both global and local features
+        Returns:
+            global_features: (batch, dim) - global audio features
+            local_features: (batch, seq_len, dim) - local audio features
+            audio_lengths: list of actual sequence lengths
+        """
+        audio_embeddings = self.audio_embedding_model(batch['audio'].mean(1))  # (batch, seq_len, 768)
+        
+        # Get local features (before projection)
+        local_features = audio_embeddings  # (batch, seq_len, 768)
+        
+        # Calculate actual lengths based on duration
+        audio_lengths = []
+        for i, duration in enumerate(batch['duration']):
+            if duration <= 10:
+                audio_lengths.append(1)
+            elif duration <= 20:
+                audio_lengths.append(min(2, audio_embeddings.shape[1]))
+            else:
+                audio_lengths.append(audio_embeddings.shape[1])
+        
+        # Aggregate for global features
+        aggregated = []
+        for i, duration in enumerate(batch['duration']):
+            if duration <= 10:
+                aggregated.append(audio_embeddings[i, 0])
+            elif duration <= 20:
+                aggregated.append(audio_embeddings[i, :2].mean(-2))
+            else:
+                aggregated.append(audio_embeddings[i].mean(-2))
+        
+        global_features = torch.stack(aggregated)
+        global_features = self.audio_projection(global_features)  # (batch, 1024)
+        global_features = torch.nn.functional.normalize(global_features, p=2, dim=-1)
+        
+        # Project local features
+        batch_size, seq_len, dim = local_features.shape
+        local_features = local_features.reshape(-1, dim)  # (batch*seq_len, 768)
+        local_features = self.audio_projection(local_features)  # (batch*seq_len, 1024)
+        local_features = local_features.reshape(batch_size, seq_len, -1)  # (batch, seq_len, 1024)
+        local_features = torch.nn.functional.normalize(local_features, p=2, dim=2)
+        
+        return global_features, local_features, audio_lengths
+    
+    def forward_text_with_local(self, batch):
+        """
+        Forward text and return both global and local features
+        Returns:
+            global_features: (batch, dim) - global text features
+            local_features: (batch, seq_len, dim) - local text features
+            text_lengths: list of actual sequence lengths
+        """
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+        captions = []
+        for i, b in enumerate([c[0] for c in batch['captions']]):
+            if not (type(b) == str):
+                print(b)
+                b = b[0]
+            captions.append(b.lower().translate(str.maketrans('', '', string.punctuation)))
+
+        tokenized = self.tokenizer(
+            captions,
+            add_special_tokens=True,
+            padding='max_length',
+            return_tensors='pt',
+            max_length=32,
+            truncation=True
+        )
+
+        token_embeddings = self.text_embedding_model(
+            input_ids=tokenized['input_ids'].to(device),
+            attention_mask=tokenized['attention_mask'].to(device)
+        )[0]  # (batch, seq_len, dim)
+        
+        # Get local features (before projection)
+        local_features = token_embeddings  # (batch, seq_len, 768 or 1024)
+        
+        # Calculate actual lengths
+        text_lengths = tokenized['attention_mask'].sum(dim=1).cpu().tolist()
+        
+        # Global features (CLS token)
+        global_features = token_embeddings[:, 0, :]  # (batch, dim)
+        global_features = self.text_projection(global_features)  # (batch, 1024)
+        global_features = torch.nn.functional.normalize(global_features, p=2, dim=-1)
+        
+        # Project local features
+        batch_size, seq_len, dim = local_features.shape
+        local_features = local_features.reshape(-1, dim)  # (batch*seq_len, dim)
+        local_features = self.text_projection(local_features)  # (batch*seq_len, 1024)
+        local_features = local_features.reshape(batch_size, seq_len, -1)  # (batch, seq_len, 1024)
+        local_features = torch.nn.functional.normalize(local_features, p=2, dim=2)
+        
+        return global_features, local_features, text_lengths
 
     def forward_audio(self, batch):
 
@@ -131,7 +260,18 @@ class AudioRetrievalModel(pl.LightningModule):
 
         self.lr_scheduler_step(batch_idx)
 
-        audio_embeddings, text_embeddings = self.forward(batch) # batch 1: sound IDs ['204046', '266329']; ['Paper_Parchment_Rustling.wav', 'metalTunnel.wav']
+        # Get embeddings based on whether Intra-Modal Alignment is enabled
+        if self.enable_intra_modal_alignment:
+            # Get global and local features
+            audio_global, audio_local, audio_lengths = self.forward_audio_with_local(batch)
+            text_global, text_local, text_lengths = self.forward_text_with_local(batch)
+            
+            # Use global features for main contrastive loss
+            audio_embeddings = audio_global
+            text_embeddings = text_global
+        else:
+            # Original behavior: only global features
+            audio_embeddings, text_embeddings = self.forward(batch)
 
         # compute pairwise similarities
         C = torch.matmul(audio_embeddings, text_embeddings.T)
@@ -148,12 +288,73 @@ class AudioRetrievalModel(pl.LightningModule):
         paths = np.array([hash(batch['dataset'][i] + batch['subset'][i] + p) for i, p in enumerate(batch['fname'])])
         I = torch.tensor(paths[None, :] == paths[:, None])
 
-        loss = -0.5 * (C_audio[torch.where(I)].mean() + C_text[torch.where(I)].mean())
+        # Main contrastive loss
+        main_loss = -0.5 * (C_audio[torch.where(I)].mean() + C_text[torch.where(I)].mean())
+        total_loss = main_loss
+        
+        # Add Intra-Modal Alignment losses if enabled
+        if self.enable_intra_modal_alignment:
+            # Handle duplicate paths: average features for duplicate paths
+            unique_paths_dict = {}
+            for i, p in enumerate(paths):
+                if p not in unique_paths_dict:
+                    unique_paths_dict[p] = []
+                unique_paths_dict[p].append(i)
+            
+            # Get unique paths and their indices
+            unique_paths_list = list(unique_paths_dict.keys())
+            num_unique = len(unique_paths_list)
+            
+            # Initialize tensors for averaged features
+            device = audio_global.device
+            audio_global_unique = torch.zeros(num_unique, audio_global.size(1), device=device)
+            text_global_unique = torch.zeros(num_unique, text_global.size(1), device=device)
+            audio_local_unique = torch.zeros(num_unique, audio_local.size(1), audio_local.size(2), device=device)
+            text_local_unique = torch.zeros(num_unique, text_local.size(1), text_local.size(2), device=device)
+            audio_lengths_unique = []
+            text_lengths_unique = []
+            mask = torch.zeros(len(paths), dtype=torch.bool, device=device)
+            
+            # Average features for each unique path
+            for unique_idx, path in enumerate(unique_paths_list):
+                indices = unique_paths_dict[path]
+                replacement_idx = indices[0]
+                mask[replacement_idx] = True
+                
+                # Average global features
+                audio_global_unique[unique_idx] = audio_global[indices].mean(0)
+                text_global_unique[unique_idx] = text_global[indices].mean(0)
+                
+                # Average local features
+                audio_local_unique[unique_idx] = audio_local[indices].mean(0)
+                text_local_unique[unique_idx] = text_local[indices].mean(0)
+                
+                # Use average length (or max, depending on your preference)
+                audio_lengths_unique.append(max([audio_lengths[i] for i in indices]))
+                text_lengths_unique.append(max([text_lengths[i] for i in indices]))
+            
+            # Matching loss (global-to-global)
+            if self.enable_matching_loss:
+                matching_loss = self.matching_criterion(audio_global_unique, text_global_unique)
+                total_loss = total_loss + matching_loss * self.matching_loss_weight
+                self.log("train/matching_loss", matching_loss, batch_size=len(audio_embeddings), sync_dist=True)
+            
+            # Alignment loss (local-to-local)
+            if self.enable_alignment_loss:
+                alignment_loss = self.alignment_criterion(
+                    audio_local_unique, 
+                    text_local_unique, 
+                    audio_lengths_unique, 
+                    text_lengths_unique
+                )
+                total_loss = total_loss + alignment_loss * self.alignment_loss_weight
+                self.log("train/alignment_loss", alignment_loss, batch_size=len(audio_embeddings), sync_dist=True)
 
-        self.log("train/loss", loss, batch_size=len(audio_embeddings), sync_dist=True, prog_bar=True)
+        self.log("train/loss", total_loss, batch_size=len(audio_embeddings), sync_dist=True, prog_bar=True)
+        self.log("train/main_loss", main_loss, batch_size=len(audio_embeddings), sync_dist=True)
         self.log('train/tau', torch.abs(self.tau), sync_dist=True)
 
-        return loss
+        return total_loss
 
     def validation_step(self, batch, batch_idx):
 
