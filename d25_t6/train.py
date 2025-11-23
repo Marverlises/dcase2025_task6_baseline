@@ -3,7 +3,8 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.functional
 warnings.filterwarnings("ignore", category=FutureWarning, module="hear21passt.models.preprocess")
 
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['MASTER_PORT'] = '25777'
 from typing import Union, List, Mapping
 import torch
 import wandb
@@ -13,6 +14,9 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch import seed_everything
 from lightning.pytorch.strategies import DDPStrategy
+import logging
+
+from d25_t6.logger_config import setup_logger
 
 from aac_datasets import Clotho, WavCaps, AudioCaps
 from torch.utils.data import DataLoader
@@ -59,7 +63,7 @@ def train(
         dirpath=str(checkpoint_dir),
         filename="{epoch}",
         save_top_k=1,
-        monitor="val/mAP@10",
+        monitor="text-to-audio/val/mAP@10",
         mode="max",
         save_last=True
     )
@@ -155,10 +159,10 @@ def get_args() -> dict:
     parser.add_argument('--n_workers', type=int, default=16, help='Number of workers for data loading')
     parser.add_argument('--compile', default=True, action=argparse.BooleanOptionalAction, help='Compile the model if GPU version >= 7.')
     parser.add_argument('--logging', default=True, action=argparse.BooleanOptionalAction, help='Log metrics in wandb or not.')
-    parser.add_argument('--exp_name', type=str, default='exp_test', help='Directory to save logs.')
+    parser.add_argument('--exp_name', type=str, default='', help='Directory to save logs.')
     # Parameter initialization & resume training
     parser.add_argument('--resume_ckpt_path', type=str, default=None, help='Path to checkpoint to resume training from.')
-    parser.add_argument('--load_ckpt_path', type=str, default="/share/project/baiyu/project/dcase2025_task6_baseline/checkpoints/dataset_audiocaps/last.ckpt", help='Path to checkpoint used as a weight initialization for training.')
+    parser.add_argument('--load_ckpt_path', type=str, default="", help='Path to checkpoint used as a weight initialization for training.')
 
     # Training parameters
     parser.add_argument('--seed', type=int, default=13, help='Random seed of experiment')
@@ -181,7 +185,7 @@ def get_args() -> dict:
     parser.add_argument('--roberta_base', default=False, action=argparse.BooleanOptionalAction,  help='Use Roberta base or large.')
 
     # Intra-Modal Alignment parameters
-    parser.add_argument('--enable_intra_modal_alignment', default=False, action=argparse.BooleanOptionalAction, 
+    parser.add_argument('--enable_intra_modal_alignment', default=False, action=argparse.BooleanOptionalAction,
                        help='Enable Intra-Modal Alignment (global-local alignment).')
     parser.add_argument('--enable_matching_loss', default=False, action=argparse.BooleanOptionalAction,
                        help='Enable matching loss (global-to-global contrastive loss).')
@@ -205,7 +209,7 @@ def get_args() -> dict:
 
     # use additional data sets...
     parser.add_argument('--wavcaps', default=False, action=argparse.BooleanOptionalAction, help='Include WavCaps in the training or not.')
-    parser.add_argument('--audiocaps', default=True, action=argparse.BooleanOptionalAction, help='Include AudioCaps in the training or not.')
+    parser.add_argument('--audiocaps', default=False, action=argparse.BooleanOptionalAction, help='Include AudioCaps in the training or not.')
     parser.add_argument('--clotho', default=False, action=argparse.BooleanOptionalAction, help='Include ClothoV2.1 eval, test in the training or not.')
 
     # Paths
@@ -233,7 +237,19 @@ if __name__ == '__main__':
     - Runs training and/or testing based on arguments.
     """
     args = get_args()
-
+    
+    # 设置logger，在DDP环境中只在rank 0输出
+    rank = int(os.environ.get('LOCAL_RANK', os.environ.get('RANK', 0)))
+    logger = setup_logger(rank=rank)
+    
+    # log used datasets
+    logger.info("Using datasets:")
+    if args['clotho']:
+        logger.info("- ClothoV2.1")
+    if args['audiocaps']:
+        logger.info("- AudioCaps")
+    if args['wavcaps']:
+        logger.info("- WavCaps")
     os.makedirs(args["data_path"], exist_ok=True)
     # download data sets; will be ignored if exists
     # ClothoV2.1
@@ -250,17 +266,20 @@ if __name__ == '__main__':
     if args['seed'] > 0:
         seed_everything(args['seed'], workers=True)
     else:
-        print("Not seeding experiment.")
+        logger.info("Not seeding experiment.")
 
     # initialize wandb, i.e., the logging framework
     if args['logging']:
         wandb.init(project="d25_t6", name=args['exp_name'])
-        logger = WandbLogger()
+        wandb_logger = WandbLogger()
     else:
-        logger = None
+        wandb_logger = None
 
     # initialize the model
     if args['load_ckpt_path']:
+        logger.info(f"Loading model from checkpoint: {args['load_ckpt_path']}")
+        if wandb_logger is not None:
+            wandb_logger.log_text(f"Loading model from checkpoint: {args['load_ckpt_path']}")
         model = AudioRetrievalModel.load_from_checkpoint(args['load_ckpt_path'])
     else:
         model = AudioRetrievalModel(**args)
@@ -287,21 +306,21 @@ if __name__ == '__main__':
 
         val_ds = custom_loading(Clotho(subset="val", root=args["clotho_path"], flat_captions=True))
 
-        model = train(model, train_ds, val_ds, logger, args)
+        model = train(model, train_ds, val_ds, wandb_logger, args)
 
     # test
     if args['test']:
         if args['clotho']:
             # test on ClothoV2.1 eval set
             test_ds = custom_loading(Clotho(subset="eval", root=args["clotho_path"], flat_captions=True))
-            results = test(model, test_ds, logger, args)
-            print("Test on ClothoV2.1 evaluation set:")
-            print(results)
+            results = test(model, test_ds, wandb_logger, args)
+            logger.info("Test on ClothoV2.1 evaluation set:")
+            logger.info(results)
         if args['audiocaps']:
             # test on AudioCaps eval set
             test_ds = custom_loading(
                 AudioCaps(subset="test", root=args["audiocaps_path"], download=False, download_audio=False, audio_format='mp3'))
-            results = test(model, test_ds, logger, args)
-            print("Test on AudioCaps evaluation set:")
-            print(results)
+            results = test(model, test_ds, wandb_logger, args)
+            logger.info("Test on AudioCaps evaluation set:")
+            logger.info(results)
 

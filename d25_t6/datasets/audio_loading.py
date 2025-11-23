@@ -4,8 +4,12 @@ import numpy as np
 import os
 import librosa
 import torch
+import logging
 
 from torch import Tensor
+from d25_t6.logger_config import get_logger
+
+logger = get_logger()
 
 
 def custom_loading(dataset: aac_datasets.datasets.base.AACDataset, normalize_audios=False) ->  aac_datasets.datasets.base.AACDataset:
@@ -171,26 +175,26 @@ def _load_random_segment_ffmpeg(
 
     except FileNotFoundError as e:
         # FFmpeg/ffprobe not installed, use librosa fallback
-        # Only print warning once to avoid spam
+        # Only log warning once to avoid spam
         if not hasattr(_load_random_segment_ffmpeg, '_ffmpeg_warning_printed'):
-            print(f"Warning: ffmpeg/ffprobe not found. Falling back to librosa for audio loading.")
-            print(f"This may be slower for large audio files. Consider installing ffmpeg for better performance.")
+            logger.warning("ffmpeg/ffprobe not found. Falling back to librosa for audio loading.")
+            logger.warning("This may be slower for large audio files. Consider installing ffmpeg for better performance.")
             _load_random_segment_ffmpeg._ffmpeg_warning_printed = True
         return _load_random_segment_librosa(file_path, segment_duration, sample_rate)
     
     except ffmpeg.Error as e:
         # FFmpeg error, try librosa as fallback
-        print(f"FFmpeg error when processing file: {file_path}, falling back to librosa")
+        logger.warning(f"FFmpeg error when processing file: {file_path}, falling back to librosa")
         if hasattr(e, 'stdout') and e.stdout:
-            print("Standard Output:", e.stdout.decode() if isinstance(e.stdout, bytes) else e.stdout)
+            logger.debug(f"Standard Output: {e.stdout.decode() if isinstance(e.stdout, bytes) else e.stdout}")
         if hasattr(e, 'stderr') and e.stderr:
-            print("Standard Error:", e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr)
+            logger.debug(f"Standard Error: {e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr}")
         return _load_random_segment_librosa(file_path, segment_duration, sample_rate)
 
     except Exception as e:
         # For any other error, try librosa as fallback
-        print(f"Unexpected error when processing file: {file_path}, falling back to librosa")
-        print(str(e))
+        logger.warning(f"Unexpected error when processing file: {file_path}, falling back to librosa")
+        logger.debug(str(e))
         return _load_random_segment_librosa(file_path, segment_duration, sample_rate)
 
 

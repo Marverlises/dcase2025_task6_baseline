@@ -99,7 +99,7 @@ if __name__ == '__main__':
     - Runs inference and stores the result as a csv.
     """
     args = get_args()
-
+    os.makedirs(args["predictions_path"], exist_ok=True)
     assert os.path.exists(args["retrieval_audio_path"]), "retrieval_audio_path must exist."
     assert os.path.exists(args["retrieval_captions"]), "retrieval_captions must exist."
     assert os.path.exists(args["predictions_path"]), "predictions_path must exist."

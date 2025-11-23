@@ -6,6 +6,11 @@ import pandas as pd
 import ffmpeg
 import torch
 from tqdm import tqdm
+import logging
+
+from d25_t6.logger_config import get_logger
+
+logger = get_logger()
 
 
 def get_broken_wavcaps_files(
@@ -27,7 +32,7 @@ def get_broken_wavcaps_files(
     if not force_refresh and os.path.exists(broken_files_file):
         with open(broken_files_file, "r") as f:
             broken_flacs = json.load(f)
-        print(f"Loaded {len(broken_flacs)} broken files from cache.")
+        logger.info(f"Loaded {len(broken_flacs)} broken files from cache.")
         return broken_flacs
 
     # Collect all file paths from multiple datasets
@@ -35,7 +40,7 @@ def get_broken_wavcaps_files(
     for dataset in datasets:
         all_file_paths.extend(dataset.raw_data['fpath'])
 
-    print(f"Checking {len(all_file_paths)} audio files...")
+    logger.info(f"Checking {len(all_file_paths)} audio files...")
 
     broken_flacs = []
 
@@ -50,7 +55,7 @@ def get_broken_wavcaps_files(
     with open(broken_files_file, "w") as f:
         json.dump(broken_flacs, f, indent=4)
 
-    print(f"Found {len(broken_flacs)} broken files. List saved to {broken_files_file}.")
+    logger.info(f"Found {len(broken_flacs)} broken files. List saved to {broken_files_file}.")
     return broken_flacs
 
 
@@ -100,7 +105,7 @@ def exclude_broken_files(dataset: torch.utils.data.Dataset) -> torch.utils.data.
         if dataset[i, 'fname'].split(os.sep)[-1].split('.')[0] not in BROKEN_FILES:
             indices.append(i)
         else:
-            print("Excluding: ", dataset[i, 'fname'])
+            logger.debug(f"Excluding: {dataset[i, 'fname']}")
 
     return torch.utils.data.Subset(dataset, indices)
 
@@ -126,7 +131,7 @@ def exclude_forbidden_files(dataset: torch.utils.data.Dataset) -> torch.utils.da
         else:
             exclude += 1
 
-    print(f"Excluding {exclude} files.")
+    logger.info(f"Excluding {exclude} files.")
 
     return torch.utils.data.Subset(dataset, indices)
 
@@ -158,6 +163,6 @@ def exclude_forbidden_and_long_files(dataset: torch.utils.data.Dataset) -> torch
         else:
             exclude += 1
 
-    print(f"Excluding {exclude} files.")
+    logger.info(f"Excluding {exclude} files.")
 
     return torch.utils.data.Subset(dataset, indices)
